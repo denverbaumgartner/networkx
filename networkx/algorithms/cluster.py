@@ -17,6 +17,33 @@ __all__ = [
 ]
 
 
+def _get_multigraph_edge_weight(G, u, v, weight, multigraph_weight=sum):
+    """Get aggregated edge weight between nodes u and v for multigraphs.
+
+    Parameters
+    ----------
+    G : NetworkX graph
+        Must be a multigraph.
+    u, v : nodes
+        The endpoints of the edge.
+    weight : string or None
+        The edge attribute name for weights. If None, uses edge count.
+    multigraph_weight : callable, optional (default=sum)
+        Function to aggregate weights of parallel edges.
+
+    Returns
+    -------
+    float
+        The aggregated edge weight.
+    """
+    edges = G[u][v]  # dict of edge_key -> edge_attrs
+    if weight is not None:
+        weights = [attrs.get(weight, 1) for attrs in edges.values()]
+        return multigraph_weight(weights)
+    else:
+        return len(edges)
+
+
 @not_implemented_for("directed")
 @nx._dispatchable
 def triangles(G, nodes=None):
@@ -155,6 +182,112 @@ def _weighted_triangles_and_degree_iter(G, nodes=None, weight="weight"):
                 [(wij * wt(j, k) * wt(k, i)) for k in inbrs & jnbrs]
             ).sum()
         yield (i, len(inbrs), 2 * float(weighted_triangles))
+
+
+def _multigraph_edge_weighted_clustering(G, nodes=None, weight=None, multigraph_weight=sum):
+    """Compute edge-weighted clustering for multigraphs.
+
+    This implements a weighted clustering coefficient adapted for multigraphs,
+    where parallel edge weights are aggregated.
+
+    Parameters
+    ----------
+    G : MultiGraph or MultiDiGraph
+        A multigraph.
+    nodes : node, iterable of nodes, or None
+        Nodes to compute clustering for.
+    weight : string or None
+        Edge weight attribute name.
+    multigraph_weight : callable
+        Function to aggregate parallel edge weights.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping nodes to clustering coefficients.
+    """
+    if G.is_directed():
+        # For directed multigraphs, fall back to distinct_neighbors approach
+        H = nx.DiGraph(G)
+        return clustering(H, nodes=nodes, weight=weight)
+
+    # Get max weight for normalization
+    if G.number_of_edges() == 0:
+        max_weight = 1
+    else:
+        max_weight = 1
+        for u in G.nodes():
+            for v in G.neighbors(u):
+                if u != v:
+                    agg_w = _get_multigraph_edge_weight(G, u, v, weight, multigraph_weight)
+                    if agg_w > max_weight:
+                        max_weight = agg_w
+
+    if nodes is None:
+        nodes_iter = G.nodes()
+    else:
+        try:
+            if nodes in G:
+                nodes_iter = [nodes]
+            else:
+                nodes_iter = list(G.nbunch_iter(nodes))
+        except TypeError:
+            nodes_iter = list(G.nbunch_iter(nodes))
+
+    clusterc = {}
+
+    for v in nodes_iter:
+        # Get distinct neighbors (excluding self-loops)
+        neighbors = set(G.neighbors(v)) - {v}
+        k = len(neighbors)
+
+        if k < 2:
+            clusterc[v] = 0.0
+            continue
+
+        # Compute strength (sum of aggregated weights to neighbors)
+        strength = sum(
+            _get_multigraph_edge_weight(G, v, u, weight, multigraph_weight)
+            for u in neighbors
+        )
+
+        if strength == 0:
+            clusterc[v] = 0.0
+            continue
+
+        # Compute weighted triangles using geometric mean of all three edges
+        # This implements the Onnela et al. (2005) weighted clustering
+        import numpy as np
+
+        weighted_triangles = 0.0
+        neighbors_list = list(neighbors)
+
+        for i, u in enumerate(neighbors_list):
+            w_vu = _get_multigraph_edge_weight(G, v, u, weight, multigraph_weight) / max_weight
+            for w in neighbors_list[i + 1:]:
+                # Check if u and w are connected
+                if G.has_edge(u, w):
+                    w_vw = _get_multigraph_edge_weight(G, v, w, weight, multigraph_weight) / max_weight
+                    w_uw = _get_multigraph_edge_weight(G, u, w, weight, multigraph_weight) / max_weight
+                    # Geometric mean (cube root) of all three edge weights
+                    triangle_weight = np.cbrt(w_vu * w_vw * w_uw)
+                    weighted_triangles += triangle_weight
+
+        # Multiply by 2 to match the standard formula 2*T/(k*(k-1))
+        # where T is the number of triangles (weighted in this case)
+        weighted_triangles *= 2
+
+        # Compute clustering coefficient using degree-based formula
+        # c = 2 * weighted_triangles_sum / (k * (k - 1))
+        denominator = k * (k - 1)
+        if denominator == 0:
+            clusterc[v] = 0.0
+        else:
+            clusterc[v] = weighted_triangles / denominator
+
+    if nodes in G:
+        return clusterc[nodes]
+    return clusterc
 
 
 @not_implemented_for("multigraph")
@@ -322,7 +455,7 @@ def all_triangles(G, nbunch=None):
 
 
 @nx._dispatchable(edge_attrs="weight")
-def average_clustering(G, nodes=None, weight=None, count_zeros=True):
+def average_clustering(G, nodes=None, weight=None, count_zeros=True, method="distinct_neighbors", multigraph_weight=sum):
     r"""Compute the average clustering coefficient for the graph G.
 
     The clustering coefficient for the graph is the average,
@@ -346,6 +479,13 @@ def average_clustering(G, nodes=None, weight=None, count_zeros=True):
 
     count_zeros : bool
        If False include only the nodes with nonzero clustering in the average.
+
+    method : str, optional (default="distinct_neighbors")
+        Algorithm for handling multigraphs. See `clustering` for details.
+
+    multigraph_weight : callable, optional (default=sum)
+        For method="edge_weighted" on multigraphs, function to aggregate
+        weights of parallel edges. See `clustering` for details.
 
     Returns
     -------
@@ -375,14 +515,14 @@ def average_clustering(G, nodes=None, weight=None, count_zeros=True):
        nodes and leafs on clustering measures for small-world networks.
        https://arxiv.org/abs/0802.2512
     """
-    c = clustering(G, nodes, weight=weight).values()
+    c = clustering(G, nodes, weight=weight, method=method, multigraph_weight=multigraph_weight).values()
     if not count_zeros:
         c = [v for v in c if abs(v) > 0]
     return sum(c) / len(c)
 
 
 @nx._dispatchable(edge_attrs="weight")
-def clustering(G, nodes=None, weight=None):
+def clustering(G, nodes=None, weight=None, method="distinct_neighbors", multigraph_weight=sum):
     r"""Compute the clustering coefficient for nodes.
 
     For unweighted graphs, the clustering of a node :math:`u`
@@ -438,6 +578,26 @@ def clustering(G, nodes=None, weight=None):
        The edge attribute that holds the numerical value used as a weight.
        If None, then each edge has weight 1.
 
+    method : str, optional (default="distinct_neighbors")
+        Algorithm for handling multigraphs. Options:
+
+        - "distinct_neighbors": Collapse parallel edges to create a simple graph,
+          then compute standard clustering. Degree counts unique neighbors.
+          This gives C=1.0 when all neighbors are connected, regardless of
+          edge multiplicity.
+
+        - "edge_weighted": Weight triangles by edge strength. For multigraphs,
+          parallel edges are aggregated using `multigraph_weight`. The clustering
+          coefficient accounts for the relative strength of connections.
+
+        For simple graphs, this parameter is ignored.
+
+    multigraph_weight : callable, optional (default=sum)
+        For method="edge_weighted" on multigraphs, function to aggregate
+        weights of parallel edges. Common options: sum, max, min, statistics.mean.
+        For unweighted multigraphs (weight=None), aggregates edge counts.
+        Ignored for method="distinct_neighbors" and simple graphs.
+
     Returns
     -------
     out : float, or dictionary
@@ -455,6 +615,19 @@ def clustering(G, nodes=None, weight=None):
     -----
     Self loops are ignored.
 
+    For multigraphs, the interpretation of "clustering" depends on the method:
+
+    - **distinct_neighbors**: This method answers "what fraction of my neighbor
+      pairs are connected?" without considering how strongly they are connected.
+      Two nodes are "connected" if ANY edge exists between them. This is the
+      most intuitive interpretation and matches standard graph theory definitions.
+      Result: C=1.0 means all neighbors know each other.
+
+    - **edge_weighted**: This method accounts for connection strength. A triangle
+      with many parallel edges contributes more than a triangle with single edges.
+      Result: C<1.0 is possible even when all neighbors are connected, if edge
+      weights are imbalanced.
+
     References
     ----------
     .. [1] Generalizations of the clustering coefficient to weighted
@@ -469,6 +642,25 @@ def clustering(G, nodes=None, weight=None):
     .. [4] Clustering in complex directed networks by G. Fagiolo,
        Physical Review E, 76(2), 026107 (2007).
     """
+    # Handle multigraphs
+    if G.is_multigraph():
+        if method == "distinct_neighbors":
+            # Collapse to simple graph
+            if G.is_directed():
+                H = nx.DiGraph(G)
+            else:
+                H = nx.Graph(G)
+            return clustering(H, nodes=nodes, weight=weight)
+        elif method == "edge_weighted":
+            # Use edge-weighted clustering for multigraphs
+            return _multigraph_edge_weighted_clustering(
+                G, nodes, weight, multigraph_weight
+            )
+        else:
+            raise nx.NetworkXError(
+                f"Unknown method '{method}'. Use 'distinct_neighbors' or 'edge_weighted'."
+            )
+
     if G.is_directed():
         if weight is not None:
             td_iter = _directed_weighted_triangles_and_degree_iter(G, nodes, weight)
@@ -523,12 +715,24 @@ def transitivity(G):
     -----
     Self loops are ignored.
 
+    For multigraphs, parallel edges are collapsed to single edges before
+    computing transitivity. This is equivalent to the "distinct_neighbors"
+    approach - triangles are counted based on whether neighbors are connected
+    by at least one edge.
+
     Examples
     --------
     >>> G = nx.complete_graph(5)
     >>> print(nx.transitivity(G))
     1.0
     """
+    # Handle multigraphs by collapsing to simple graph
+    if G.is_multigraph():
+        if G.is_directed():
+            G = nx.DiGraph(G)
+        else:
+            G = nx.Graph(G)
+
     triangles_contri = [
         (t, d * (d - 1)) for v, d, t, _ in _triangles_and_degree_iter(G)
     ]

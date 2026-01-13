@@ -3,12 +3,57 @@
 import math
 
 import networkx as nx
-from networkx.utils import not_implemented_for
 
 __all__ = ["katz_centrality", "katz_centrality_numpy"]
 
 
-@not_implemented_for("multigraph")
+def _get_edge_weight(G, u, v, weight, multigraph_weight=sum):
+    """Get aggregated edge weight between nodes u and v.
+
+    For simple graphs, returns the edge weight attribute (or 1 if unweighted).
+    For multigraphs, aggregates weights of all parallel edges using the
+    specified aggregation function.
+
+    Parameters
+    ----------
+    G : NetworkX graph
+        The graph containing the edge.
+    u, v : nodes
+        The endpoints of the edge.
+    weight : string or None
+        The edge attribute name for weights. If None, each edge has weight 1.
+    multigraph_weight : callable, optional (default=sum)
+        Function to aggregate weights of parallel edges in multigraphs.
+        Common options: sum, max, min, statistics.mean.
+        For unweighted multigraphs, aggregates edge counts.
+
+    Returns
+    -------
+    float
+        The (aggregated) edge weight.
+
+    Notes
+    -----
+    For multigraphs without a weight attribute specified (weight=None),
+    this returns the count of parallel edges (len(edges)), which represents
+    the "strength" of the connection through multiplicity.
+    """
+    if G.is_multigraph():
+        edges = G[u][v]  # dict of edge_key -> edge_attrs
+        if weight is not None:
+            weights = [attrs.get(weight, 1) for attrs in edges.values()]
+            return multigraph_weight(weights)
+        else:
+            # For unweighted multigraphs, return count of parallel edges
+            return len(edges)
+    else:
+        # Simple graph
+        if weight is not None:
+            return G[u][v].get(weight, 1)
+        else:
+            return 1
+
+
 @nx._dispatchable(edge_attrs="weight")
 def katz_centrality(
     G,
@@ -19,6 +64,7 @@ def katz_centrality(
     nstart=None,
     normalized=True,
     weight=None,
+    multigraph_weight=sum,
 ):
     r"""Compute the Katz centrality for the nodes of the graph G.
 
@@ -79,6 +125,13 @@ def katz_centrality(
       Otherwise holds the name of the edge attribute used as weight.
       In this measure the weight is interpreted as the connection strength.
 
+    multigraph_weight : callable, optional (default=sum)
+        For multigraphs, a function to aggregate weights of parallel edges.
+        The function should accept a sequence of weights and return a single
+        value. Common options: sum, max, min, statistics.mean.
+        For unweighted multigraphs (weight=None), this aggregates edge counts.
+        Ignored for simple graphs.
+
     Returns
     -------
     nodes : dictionary
@@ -136,6 +189,12 @@ def katz_centrality(
     to the in-edges in the graph. For out-edges Katz centrality,
     first reverse the graph with ``G.reverse()``.
 
+    For multigraphs, parallel edges between the same pair of nodes are
+    aggregated using the `multigraph_weight` function (default: sum).
+    This means that multiple edges strengthen the connection between nodes.
+    If `weight=None` for a multigraph, the number of parallel edges is used
+    as the effective weight.
+
     References
     ----------
     .. [1] Mark E. J. Newman:
@@ -173,7 +232,8 @@ def katz_centrality(
         # do the multiplication y^T = Alpha * x^T A + Beta
         for n in x:
             for nbr in G[n]:
-                x[nbr] += xlast[n] * G[n][nbr].get(weight, 1)
+                w = _get_edge_weight(G, n, nbr, weight, multigraph_weight)
+                x[nbr] += xlast[n] * w
         for n in x:
             x[n] = alpha * x[n] + b[n]
 
@@ -194,7 +254,6 @@ def katz_centrality(
     raise nx.PowerIterationFailedConvergence(max_iter)
 
 
-@not_implemented_for("multigraph")
 @nx._dispatchable(edge_attrs="weight")
 def katz_centrality_numpy(G, alpha=0.1, beta=1.0, normalized=True, weight=None):
     r"""Compute the Katz centrality for the graph G.
@@ -295,6 +354,11 @@ def katz_centrality_numpy(G, alpha=0.1, beta=1.0, normalized=True, weight=None):
     For directed graphs this finds "left" eigenvectors which corresponds
     to the in-edges in the graph. For out-edges Katz centrality,
     first reverse the graph with ``G.reverse()``.
+
+    For multigraphs, parallel edges are aggregated by summing their weights
+    before computing centrality. This is handled automatically by the
+    underlying adjacency matrix conversion. If edges have no weight attribute,
+    each parallel edge contributes a weight of 1 to the sum.
 
     References
     ----------
