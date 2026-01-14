@@ -150,12 +150,14 @@ class TestEigenvectorCentralityDirected:
 
 
 class TestEigenvectorCentralityExceptions:
-    def test_multigraph(self):
-        with pytest.raises(nx.NetworkXException):
+    def test_multigraph_empty(self):
+        """Empty multigraph should raise NetworkXPointlessConcept"""
+        with pytest.raises(nx.NetworkXPointlessConcept):
             nx.eigenvector_centrality(nx.MultiGraph())
 
-    def test_multigraph_numpy(self):
-        with pytest.raises(nx.NetworkXException):
+    def test_multigraph_numpy_empty(self):
+        """Empty multigraph should raise NetworkXPointlessConcept"""
+        with pytest.raises(nx.NetworkXPointlessConcept):
             nx.eigenvector_centrality_numpy(nx.MultiGraph())
 
     def test_null(self):
@@ -184,3 +186,103 @@ class TestEigenvectorCentralityExceptions:
             nx.NetworkXException, match="initial vector cannot have all zero values"
         ):
             nx.eigenvector_centrality(G, nstart={v: 0 for v in G})
+
+
+class TestEigenvectorCentralityMultigraph:
+    def test_multigraph_basic(self):
+        """Eigenvector centrality: basic multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)  # parallel edge
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+
+        centrality = nx.eigenvector_centrality(G)
+        assert len(centrality) == 3
+        # Node 1 should have highest centrality (most edge "weight" via parallel edges)
+        assert centrality[1] >= centrality[2]
+
+    def test_multigraph_weighted(self):
+        """Eigenvector centrality: weighted multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1, weight=2.0)
+        G.add_edge(0, 1, weight=3.0)  # total = 5.0
+        G.add_edge(1, 2, weight=1.0)
+        G.add_edge(2, 0, weight=1.0)
+
+        centrality = nx.eigenvector_centrality(G, weight="weight")
+        assert len(centrality) == 3
+
+    def test_multigraph_weight_aggregation_sum(self):
+        """Verify sum aggregation for parallel edges"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1, weight=1.0)
+        G.add_edge(0, 1, weight=2.0)
+        G.add_edge(0, 1, weight=3.0)  # total = 6.0
+        G.add_edge(1, 2, weight=6.0)
+        G.add_edge(2, 0, weight=6.0)
+
+        # With sum aggregation, this should be like a simple triangle
+        # with all edges having weight 6
+        H = nx.Graph()
+        H.add_edge(0, 1, weight=6.0)
+        H.add_edge(1, 2, weight=6.0)
+        H.add_edge(2, 0, weight=6.0)
+
+        c_multi = nx.eigenvector_centrality(G, weight="weight", multigraph_weight=sum)
+        c_simple = nx.eigenvector_centrality(H, weight="weight")
+
+        for node in G.nodes():
+            assert c_multi[node] == pytest.approx(c_simple[node], abs=1e-5)
+
+    def test_multigraph_weight_aggregation_max(self):
+        """Verify max aggregation for parallel edges"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1, weight=1.0)
+        G.add_edge(0, 1, weight=5.0)
+        G.add_edge(0, 1, weight=3.0)  # max = 5.0
+        G.add_edge(1, 2, weight=5.0)
+        G.add_edge(2, 0, weight=5.0)
+
+        H = nx.Graph()
+        H.add_edge(0, 1, weight=5.0)
+        H.add_edge(1, 2, weight=5.0)
+        H.add_edge(2, 0, weight=5.0)
+
+        c_multi = nx.eigenvector_centrality(G, weight="weight", multigraph_weight=max)
+        c_simple = nx.eigenvector_centrality(H, weight="weight")
+
+        for node in G.nodes():
+            assert c_multi[node] == pytest.approx(c_simple[node], abs=1e-5)
+
+    def test_multigraph_unweighted_counts_edges(self):
+        """For unweighted multigraphs, parallel edges count as weight"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)  # 3 edges
+        G.add_edge(1, 2)  # 1 edge
+        G.add_edge(2, 0)  # 1 edge
+
+        # Equivalent simple graph with edge counts as weights
+        H = nx.Graph()
+        H.add_edge(0, 1, weight=3)
+        H.add_edge(1, 2, weight=1)
+        H.add_edge(2, 0, weight=1)
+
+        c_multi = nx.eigenvector_centrality(G)  # unweighted
+        c_simple = nx.eigenvector_centrality(H, weight="weight")
+
+        for node in G.nodes():
+            assert c_multi[node] == pytest.approx(c_simple[node], abs=1e-5)
+
+    def test_multidigraph(self):
+        """Eigenvector centrality: MultiDiGraph"""
+        G = nx.MultiDiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+
+        centrality = nx.eigenvector_centrality(G.reverse())
+        assert len(centrality) == 3

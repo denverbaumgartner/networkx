@@ -676,3 +676,202 @@ class TestGeneralizedDegree:
             3: {2: 2, 3: 2},
             4: {2: 2, 3: 2},
         }
+
+
+class TestClusteringMultigraph:
+    @classmethod
+    def setup_class(cls):
+        pytest.importorskip("numpy")
+
+    def test_multigraph_distinct_neighbors_basic(self):
+        """Clustering with distinct_neighbors: basic multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)  # parallel edge
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+
+        # Triangle exists, so clustering should be 1.0 for all nodes
+        c = nx.clustering(G)
+        assert c[0] == 1.0
+        assert c[1] == 1.0
+        assert c[2] == 1.0
+
+    def test_multigraph_distinct_neighbors_no_triangle(self):
+        """Clustering with distinct_neighbors: path graph as multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(1, 2)
+
+        # No triangles
+        c = nx.clustering(G)
+        assert c[0] == 0.0
+        assert c[1] == 0.0
+        assert c[2] == 0.0
+
+    def test_multigraph_distinct_neighbors_matches_simple(self):
+        """distinct_neighbors should match simple graph clustering"""
+        # Create multigraph
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+
+        # Create equivalent simple graph
+        H = nx.Graph()
+        H.add_edge(0, 1)
+        H.add_edge(1, 2)
+        H.add_edge(2, 0)
+
+        c_multi = nx.clustering(G, method="distinct_neighbors")
+        c_simple = nx.clustering(H)
+
+        for node in G.nodes():
+            assert c_multi[node] == c_simple[node]
+
+    def test_multigraph_edge_weighted_basic(self):
+        """Clustering with edge_weighted: basic multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)  # 3 edges to 1
+        G.add_edge(0, 2)
+        G.add_edge(0, 2)
+        G.add_edge(0, 2)  # 3 edges to 2
+        G.add_edge(1, 2)  # 1 edge between neighbors
+
+        # With edge_weighted, unbalanced triangle = less clustering
+        c = nx.clustering(G, method="edge_weighted")
+        # Node 0 has strong connections to 1 and 2, but 1-2 is weak
+        assert c[0] < 1.0
+
+    def test_multigraph_edge_weighted_balanced(self):
+        """edge_weighted with balanced triangle should be close to 1.0"""
+        G = nx.MultiGraph()
+        # Add same number of edges to all pairs
+        for _ in range(3):
+            G.add_edge(0, 1)
+            G.add_edge(1, 2)
+            G.add_edge(2, 0)
+
+        c = nx.clustering(G, method="edge_weighted")
+        # Balanced triangle should have high clustering
+        assert c[0] > 0.9
+
+    def test_multigraph_edge_weighted_with_weights(self):
+        """edge_weighted with explicit edge weights"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1, weight=2.0)
+        G.add_edge(0, 1, weight=3.0)  # sum = 5
+        G.add_edge(0, 2, weight=2.0)
+        G.add_edge(0, 2, weight=3.0)  # sum = 5
+        G.add_edge(1, 2, weight=5.0)  # sum = 5
+
+        c = nx.clustering(G, weight="weight", method="edge_weighted")
+        # Balanced weights should give high clustering
+        assert c[0] > 0.9
+
+    def test_multigraph_edge_weighted_aggregation_max(self):
+        """edge_weighted with max aggregation"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1, weight=1.0)
+        G.add_edge(0, 1, weight=10.0)  # max = 10
+        G.add_edge(0, 2, weight=10.0)
+        G.add_edge(1, 2, weight=10.0)
+
+        c = nx.clustering(G, weight="weight", method="edge_weighted", multigraph_weight=max)
+        # With max aggregation, all edges effectively have weight 10
+        assert c[0] > 0.9
+
+    def test_multigraph_method_invalid(self):
+        """Invalid method should raise error"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+
+        with pytest.raises(nx.NetworkXError):
+            nx.clustering(G, method="invalid_method")
+
+    def test_multigraph_single_node(self):
+        """Clustering for single node in multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+
+        c = nx.clustering(G, 0)
+        assert c == 1.0
+
+    def test_multidigraph_distinct_neighbors(self):
+        """MultiDiGraph with distinct_neighbors"""
+        G = nx.MultiDiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+        G.add_edge(1, 0)
+        G.add_edge(2, 1)
+        G.add_edge(0, 2)
+
+        c = nx.clustering(G)
+        assert len(c) == 3
+
+
+class TestAverageClusteringMultigraph:
+    @classmethod
+    def setup_class(cls):
+        pytest.importorskip("numpy")
+
+    def test_average_clustering_multigraph(self):
+        """Average clustering for multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+
+        avg = nx.average_clustering(G)
+        assert avg == 1.0  # Complete triangle
+
+    def test_average_clustering_multigraph_edge_weighted(self):
+        """Average clustering with edge_weighted method"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(0, 2)
+        G.add_edge(1, 2)
+
+        avg = nx.average_clustering(G, method="edge_weighted")
+        assert 0 < avg < 1.0
+
+
+class TestTransitivityMultigraph:
+    def test_transitivity_multigraph(self):
+        """Transitivity for multigraph (collapses to simple)"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+
+        # Triangle, so transitivity = 1.0
+        t = nx.transitivity(G)
+        assert t == 1.0
+
+    def test_transitivity_multigraph_matches_simple(self):
+        """Transitivity for multigraph should match collapsed simple graph"""
+        G = nx.MultiGraph()
+        edges = [(0, 1), (0, 1), (1, 2), (2, 3), (2, 3), (3, 0)]
+        G.add_edges_from(edges)
+
+        H = nx.Graph()
+        H.add_edges_from([(0, 1), (1, 2), (2, 3), (3, 0)])
+
+        assert nx.transitivity(G) == nx.transitivity(H)

@@ -91,9 +91,10 @@ class TestKatzCentrality:
             for n in sorted(G):
                 assert b[n] == pytest.approx(b_answer[alpha][n], abs=1e-4)
 
-    def test_multigraph(self):
-        with pytest.raises(nx.NetworkXException):
-            nx.katz_centrality(nx.MultiGraph(), 0.1)
+    def test_multigraph_empty(self):
+        """Empty multigraph should return empty dict"""
+        e = nx.katz_centrality(nx.MultiGraph(), 0.1)
+        assert e == {}
 
     def test_empty(self):
         e = nx.katz_centrality(nx.Graph(), 0.1)
@@ -198,9 +199,10 @@ class TestKatzCentralityNumpy:
             for n in sorted(G):
                 assert b[n] == pytest.approx(b_answer[alpha][n], abs=1e-4)
 
-    def test_multigraph(self):
-        with pytest.raises(nx.NetworkXException):
-            nx.katz_centrality(nx.MultiGraph(), 0.1)
+    def test_multigraph_empty(self):
+        """Empty multigraph should return empty dict (tests katz_centrality)"""
+        e = nx.katz_centrality(nx.MultiGraph(), 0.1)
+        assert e == {}
 
     def test_empty(self):
         e = nx.katz_centrality(nx.Graph(), 0.1)
@@ -343,3 +345,169 @@ class TestKatzEigenvectorVKatz:
         k = nx.katz_centrality_numpy(G, 1.0 / l)
         for n in G:
             assert e[n] == pytest.approx(k[n], abs=1e-7)
+
+
+class TestKatzCentralityMultigraph:
+    def test_multigraph_basic(self):
+        """Katz centrality: basic multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)  # parallel edge
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+        alpha = 0.1
+
+        centrality = nx.katz_centrality(G, alpha)
+        assert len(centrality) == 3
+        assert all(v > 0 for v in centrality.values())
+
+    def test_multigraph_weighted(self):
+        """Katz centrality: weighted multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1, weight=2.0)
+        G.add_edge(0, 1, weight=3.0)  # sum = 5.0
+        G.add_edge(1, 2, weight=1.0)
+        G.add_edge(2, 0, weight=1.0)
+        alpha = 0.1
+
+        # Create equivalent simple graph
+        H = nx.Graph()
+        H.add_edge(0, 1, weight=5.0)
+        H.add_edge(1, 2, weight=1.0)
+        H.add_edge(2, 0, weight=1.0)
+
+        c_multi = nx.katz_centrality(G, alpha, weight="weight")
+        c_simple = nx.katz_centrality(H, alpha, weight="weight")
+
+        for node in G.nodes():
+            assert c_multi[node] == pytest.approx(c_simple[node], abs=1e-5)
+
+    def test_multigraph_aggregation_max(self):
+        """Katz centrality: max aggregation"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1, weight=0.2)
+        G.add_edge(0, 1, weight=1.0)
+        G.add_edge(0, 1, weight=0.6)  # max = 1.0
+        G.add_edge(1, 2, weight=1.0)
+        G.add_edge(2, 0, weight=1.0)
+        alpha = 0.1
+
+        H = nx.Graph()
+        H.add_edge(0, 1, weight=1.0)
+        H.add_edge(1, 2, weight=1.0)
+        H.add_edge(2, 0, weight=1.0)
+
+        c_multi = nx.katz_centrality(G, alpha, weight="weight", multigraph_weight=max)
+        c_simple = nx.katz_centrality(H, alpha, weight="weight")
+
+        for node in G.nodes():
+            assert c_multi[node] == pytest.approx(c_simple[node], abs=1e-5)
+
+    def test_multigraph_unweighted_counts_edges(self):
+        """For unweighted multigraphs, parallel edges count as weight"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)  # 3 edges
+        G.add_edge(1, 2)  # 1 edge
+        G.add_edge(2, 0)  # 1 edge
+        alpha = 0.1
+
+        H = nx.Graph()
+        H.add_edge(0, 1, weight=3)
+        H.add_edge(1, 2, weight=1)
+        H.add_edge(2, 0, weight=1)
+
+        c_multi = nx.katz_centrality(G, alpha)
+        c_simple = nx.katz_centrality(H, alpha, weight="weight")
+
+        for node in G.nodes():
+            assert c_multi[node] == pytest.approx(c_simple[node], abs=1e-5)
+
+    def test_multidigraph(self):
+        """Katz centrality: MultiDiGraph"""
+        G = nx.MultiDiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+        alpha = 0.1
+
+        centrality = nx.katz_centrality(G.reverse(), alpha)
+        assert len(centrality) == 3
+
+
+class TestKatzCentralityNumpyMultigraph:
+    @classmethod
+    def setup_class(cls):
+        global np
+        np = pytest.importorskip("numpy")
+        pytest.importorskip("scipy")
+
+    def test_multigraph_basic(self):
+        """Katz centrality numpy: basic multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)  # parallel edge
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+        alpha = 0.1
+
+        # Should not raise
+        centrality = nx.katz_centrality_numpy(G, alpha)
+        assert len(centrality) == 3
+        assert all(v > 0 for v in centrality.values())
+
+    def test_multigraph_weighted(self):
+        """Katz centrality numpy: weighted multigraph"""
+        G = nx.MultiGraph()
+        G.add_edge(0, 1, weight=2.0)
+        G.add_edge(0, 1, weight=3.0)  # parallel edge, total = 5.0
+        G.add_edge(1, 2, weight=1.0)
+        G.add_edge(2, 0, weight=1.0)
+        alpha = 0.1
+
+        # Create equivalent simple graph for comparison
+        H = nx.Graph()
+        H.add_edge(0, 1, weight=5.0)  # sum of parallel edges
+        H.add_edge(1, 2, weight=1.0)
+        H.add_edge(2, 0, weight=1.0)
+
+        centrality_multi = nx.katz_centrality_numpy(G, alpha, weight="weight")
+        centrality_simple = nx.katz_centrality_numpy(H, alpha, weight="weight")
+
+        for node in G.nodes():
+            assert centrality_multi[node] == pytest.approx(
+                centrality_simple[node], abs=1e-7
+            )
+
+    def test_multidigraph(self):
+        """Katz centrality numpy: MultiDiGraph"""
+        G = nx.MultiDiGraph()
+        G.add_edge(0, 1)
+        G.add_edge(0, 1)
+        G.add_edge(1, 2)
+        G.add_edge(2, 0)
+        alpha = 0.1
+
+        centrality = nx.katz_centrality_numpy(G, alpha)
+        assert len(centrality) == 3
+
+    def test_multigraph_matches_collapsed(self):
+        """Verify multigraph results match collapsed simple graph"""
+        G = nx.MultiGraph()
+        edges = [(0, 1), (0, 1), (0, 1), (1, 2), (1, 2), (2, 3)]
+        G.add_edges_from(edges)
+        alpha = 0.1
+
+        # Collapse to simple graph (edge count as weight)
+        H = nx.Graph()
+        H.add_edge(0, 1, weight=3)
+        H.add_edge(1, 2, weight=2)
+        H.add_edge(2, 3, weight=1)
+
+        c_multi = nx.katz_centrality_numpy(G, alpha)
+        c_simple = nx.katz_centrality_numpy(H, alpha, weight="weight")
+
+        for node in G.nodes():
+            assert c_multi[node] == pytest.approx(c_simple[node], abs=1e-7)

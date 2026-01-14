@@ -3,14 +3,61 @@
 import math
 
 import networkx as nx
-from networkx.utils import not_implemented_for
 
 __all__ = ["eigenvector_centrality", "eigenvector_centrality_numpy"]
 
 
-@not_implemented_for("multigraph")
+def _get_edge_weight(G, u, v, weight, multigraph_weight=sum):
+    """Get aggregated edge weight between nodes u and v.
+
+    For simple graphs, returns the edge weight attribute (or 1 if unweighted).
+    For multigraphs, aggregates weights of all parallel edges using the
+    specified aggregation function.
+
+    Parameters
+    ----------
+    G : NetworkX graph
+        The graph containing the edge.
+    u, v : nodes
+        The endpoints of the edge.
+    weight : string or None
+        The edge attribute name for weights. If None, each edge has weight 1.
+    multigraph_weight : callable, optional (default=sum)
+        Function to aggregate weights of parallel edges in multigraphs.
+        Common options: sum, max, min, statistics.mean.
+        For unweighted multigraphs, aggregates edge counts.
+
+    Returns
+    -------
+    float
+        The (aggregated) edge weight.
+
+    Notes
+    -----
+    For multigraphs without a weight attribute specified (weight=None),
+    this returns the count of parallel edges (len(edges)), which represents
+    the "strength" of the connection through multiplicity.
+    """
+    if G.is_multigraph():
+        edges = G[u][v]  # dict of edge_key -> edge_attrs
+        if weight is not None:
+            weights = [attrs.get(weight, 1) for attrs in edges.values()]
+            return multigraph_weight(weights)
+        else:
+            # For unweighted multigraphs, return count of parallel edges
+            return len(edges)
+    else:
+        # Simple graph
+        if weight is not None:
+            return G[u][v].get(weight, 1)
+        else:
+            return 1
+
+
 @nx._dispatchable(edge_attrs="weight")
-def eigenvector_centrality(G, max_iter=100, tol=1.0e-6, nstart=None, weight=None):
+def eigenvector_centrality(
+    G, max_iter=100, tol=1.0e-6, nstart=None, weight=None, multigraph_weight=sum
+):
     r"""Compute the eigenvector centrality for the graph G.
 
     Eigenvector centrality computes the centrality for a node by adding
@@ -65,6 +112,13 @@ def eigenvector_centrality(G, max_iter=100, tol=1.0e-6, nstart=None, weight=None
       If None, all edge weights are considered equal. Otherwise holds the
       name of the edge attribute used as weight. In this measure the
       weight is interpreted as the connection strength.
+
+    multigraph_weight : callable, optional (default=sum)
+        For multigraphs, a function to aggregate weights of parallel edges.
+        The function should accept a sequence of weights and return a single
+        value. Common options: sum, max, min, statistics.mean.
+        For unweighted multigraphs (weight=None), this aggregates edge counts.
+        Ignored for simple graphs.
 
     Returns
     -------
@@ -128,6 +182,12 @@ def eigenvector_centrality(G, max_iter=100, tol=1.0e-6, nstart=None, weight=None
     spectrum, thus guaranteeing convergence even for networks with
     negative eigenvalues of maximum modulus.
 
+    For multigraphs, parallel edges between the same pair of nodes are
+    aggregated using the `multigraph_weight` function (default: sum).
+    This means that multiple edges strengthen the connection between nodes.
+    If `weight=None` for a multigraph, the number of parallel edges is used
+    as the effective weight.
+
     References
     ----------
     .. [1] Abraham Berman and Robert J. Plemmons.
@@ -180,7 +240,7 @@ def eigenvector_centrality(G, max_iter=100, tol=1.0e-6, nstart=None, weight=None
         # do the multiplication y^T = x^T A (left eigenvector)
         for n in x:
             for nbr in G[n]:
-                w = G[n][nbr].get(weight, 1) if weight else 1
+                w = _get_edge_weight(G, n, nbr, weight, multigraph_weight)
                 x[nbr] += xlast[n] * w
         # Normalize the vector. The normalization denominator `norm`
         # should never be zero by the Perron--Frobenius
