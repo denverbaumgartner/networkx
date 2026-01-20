@@ -1,6 +1,7 @@
 """Functions for computing eigenvector centrality."""
 
 import math
+import warnings
 
 import networkx as nx
 
@@ -54,9 +55,52 @@ def _get_edge_weight(G, u, v, weight, multigraph_weight=sum):
             return 1
 
 
+def _collapse_to_simple_graph(G):
+    """Collapse any graph to a simple unweighted undirected graph.
+
+    This function:
+    1. Drops all edge weights
+    2. Converts to undirected (drops direction)
+    3. Collapses parallel edges (binary adjacency: edge exists or not)
+    4. Keeps self-loops
+
+    Parameters
+    ----------
+    G : NetworkX graph
+        Input graph (Graph, DiGraph, MultiGraph, or MultiDiGraph)
+
+    Returns
+    -------
+    H : nx.Graph
+        Simple undirected unweighted graph with the same nodes as G.
+        Edges are unweighted (no weight attribute).
+        Self-loops from G are preserved.
+
+    Notes
+    -----
+    This is intentionally the simplest possible collapse. For weighted
+    collapse with aggregation (sum, max, avg), use the existing
+    `multigraph_weight` parameter in `eigenvector_centrality()`.
+    """
+    H = nx.Graph()
+    H.add_nodes_from(G.nodes())
+
+    # Add edges - no weights, just binary adjacency
+    # Using a set to deduplicate (handles parallel edges and bidirectional)
+    edges_seen = set()
+    for u, v in G.edges():
+        # Normalize to undirected form (smaller node first, except self-loops)
+        edge = (min(u, v), max(u, v)) if u != v else (u, v)
+        if edge not in edges_seen:
+            edges_seen.add(edge)
+            H.add_edge(u, v)  # No weight attribute
+
+    return H
+
+
 @nx._dispatchable(edge_attrs="weight")
 def eigenvector_centrality(
-    G, max_iter=100, tol=1.0e-6, nstart=None, weight=None, multigraph_weight=sum
+    G, max_iter=100, tol=1.0e-6, nstart=None, weight=None, multigraph_weight=sum, collapse_plan=None
 ):
     r"""Compute the eigenvector centrality for the graph G.
 
@@ -120,6 +164,16 @@ def eigenvector_centrality(
         For unweighted multigraphs (weight=None), this aggregates edge counts.
         Ignored for simple graphs.
 
+    collapse_plan : str or None, optional (default=None)
+        If specified, collapse the graph before computing centrality.
+        This is a master switch that overrides `weight` and `multigraph_weight`.
+        Options:
+        - None: No collapse. Use graph as-is with `multigraph_weight` for
+          parallel edge aggregation (existing behavior).
+        - "unweighted_undirected": Collapse to simple unweighted undirected graph.
+          Drops all weights, drops direction, keeps self-loops.
+          Ignores `weight` and `multigraph_weight` parameters when set.
+
     Returns
     -------
     nodes : dictionary
@@ -140,7 +194,8 @@ def eigenvector_centrality(
         If the graph G is the null graph.
 
     NetworkXError
-        If each value in `nstart` is zero.
+        If each value in `nstart` is zero, or if `collapse_plan` is set to
+        an unknown value.
 
     PowerIterationFailedConvergence
         If the algorithm fails to converge to the specified tolerance
@@ -188,6 +243,17 @@ def eigenvector_centrality(
     If `weight=None` for a multigraph, the number of parallel edges is used
     as the effective weight.
 
+    When `collapse_plan="unweighted_undirected"` is specified, the graph is
+    first collapsed to a simple unweighted undirected graph before computing
+    centrality. This means:
+    - All edge weights are discarded (adjacency is binary: 0 or 1)
+    - All edge directions are removed (A->B and B->A become single A-B)
+    - All parallel edges collapse to single edges
+    - Self-loops are preserved
+
+    The `collapse_plan` parameter overrides `weight` and `multigraph_weight`
+    when set. If conflicting parameters are specified, a UserWarning is emitted.
+
     References
     ----------
     .. [1] Abraham Berman and Robert J. Plemmons.
@@ -219,6 +285,33 @@ def eigenvector_centrality(
     .. [7] Power iteration:: https://en.wikipedia.org/wiki/Power_iteration
 
     """
+    # ===== OVERRIDE LOGIC: collapse_plan is the master switch =====
+    if collapse_plan is not None:
+        # Warn if user specified parameters that will be ignored
+        if weight is not None:
+            warnings.warn(
+                f"collapse_plan='{collapse_plan}' is set; 'weight' parameter is ignored. "
+                "To use weighted centrality, set collapse_plan=None.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if multigraph_weight is not sum:
+            warnings.warn(
+                f"collapse_plan='{collapse_plan}' is set; 'multigraph_weight' parameter is ignored. "
+                "To use custom edge aggregation, set collapse_plan=None.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Apply the collapse plan
+        if collapse_plan == "unweighted_undirected":
+            G = _collapse_to_simple_graph(G)
+            weight = None  # OVERRIDE: force unweighted
+            # multigraph_weight is now irrelevant (G is simple graph)
+        else:
+            raise nx.NetworkXError(f"Unknown collapse_plan: '{collapse_plan}'")
+    # ===== END OVERRIDE LOGIC =====
+
     if len(G) == 0:
         raise nx.NetworkXPointlessConcept(
             "cannot compute centrality for the null graph"
@@ -255,7 +348,7 @@ def eigenvector_centrality(
 
 
 @nx._dispatchable(edge_attrs="weight")
-def eigenvector_centrality_numpy(G, weight=None, max_iter=50, tol=0):
+def eigenvector_centrality_numpy(G, weight=None, max_iter=50, tol=0, collapse_plan=None):
     r"""Compute the eigenvector centrality for the graph `G`.
 
     Eigenvector centrality computes the centrality for a node by adding
@@ -310,6 +403,15 @@ def eigenvector_centrality_numpy(G, weight=None, max_iter=50, tol=0):
         Relative accuracy for eigenvalues (stopping criterion).
         The default value of 0 implies machine precision.
 
+    collapse_plan : str or None, optional (default=None)
+        If specified, collapse the graph before computing centrality.
+        This is a master switch that overrides the `weight` parameter.
+        Options:
+        - None: No collapse. Use graph as-is (existing behavior).
+        - "unweighted_undirected": Collapse to simple unweighted undirected graph.
+          Drops all weights, drops direction, keeps self-loops.
+          Ignores `weight` parameter when set.
+
     Returns
     -------
     nodes : dict of nodes
@@ -337,6 +439,9 @@ def eigenvector_centrality_numpy(G, weight=None, max_iter=50, tol=0):
     AmbiguousSolution
         If `G` is not connected.
 
+    NetworkXError
+        If `collapse_plan` is set to an unknown value.
+
     See Also
     --------
     :func:`scipy.sparse.linalg.eigs`
@@ -362,6 +467,12 @@ def eigenvector_centrality_numpy(G, weight=None, max_iter=50, tol=0):
     :func:`SciPy sparse eigenvalue solver<scipy.sparse.linalg.eigs>` (ARPACK)
     to find the largest eigenvalue/eigenvector pair using Arnoldi iterations
     [7]_.
+
+    When `collapse_plan="unweighted_undirected"` is specified, the graph is
+    first collapsed to a simple unweighted undirected graph before computing
+    centrality. The `collapse_plan` parameter overrides the `weight` parameter
+    when set. If a conflicting `weight` parameter is specified, a UserWarning
+    is emitted.
 
     References
     ----------
@@ -398,6 +509,25 @@ def eigenvector_centrality_numpy(G, weight=None, max_iter=50, tol=0):
     """
     import numpy as np
     import scipy as sp
+
+    # ===== OVERRIDE LOGIC: collapse_plan is the master switch =====
+    if collapse_plan is not None:
+        # Warn if user specified parameters that will be ignored
+        if weight is not None:
+            warnings.warn(
+                f"collapse_plan='{collapse_plan}' is set; 'weight' parameter is ignored. "
+                "To use weighted centrality, set collapse_plan=None.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Apply the collapse plan
+        if collapse_plan == "unweighted_undirected":
+            G = _collapse_to_simple_graph(G)
+            weight = None  # OVERRIDE: force unweighted
+        else:
+            raise nx.NetworkXError(f"Unknown collapse_plan: '{collapse_plan}'")
+    # ===== END OVERRIDE LOGIC =====
 
     if len(G) == 0:
         raise nx.NetworkXPointlessConcept(
